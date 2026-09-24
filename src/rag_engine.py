@@ -3,8 +3,8 @@ import time
 from typing import List, Dict, Any, Tuple
 from groq import Groq
 
-# LLaMA-3.3-70B-Versatile is extremely fast and accurate for financial auditing
-GROQ_MODEL = "llama-3.3-70b-versatile"
+# Universally accessible model on all Groq tiers (560+ tokens/sec)
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 def get_llm_client(api_key: str = None) -> Groq:
@@ -64,7 +64,7 @@ def generate_answer(
     max_retries: int = 3
 ) -> Tuple[str, float, bool]:
     """
-    Executes answer generation using Groq LLaMA-3 with retry handling.
+    Executes answer generation using Groq LLaMA with retry handling.
     Returns: (answer_text, generation_latency, is_success)
     """
     if not retrieved_chunks:
