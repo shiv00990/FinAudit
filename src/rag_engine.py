@@ -3,6 +3,9 @@ import time
 from typing import List, Dict, Any, Tuple
 from groq import Groq
 
+# Default model exported for app.py
+GROQ_MODEL = "llama-3.1-8b-instant"
+
 
 def get_llm_client(api_key: str = None) -> Groq:
     """Initializes Groq client safely from key or environment variable."""
@@ -16,25 +19,23 @@ def get_best_available_model(client: Groq) -> str:
     """Queries Groq dynamically to find which models are active on this account."""
     preferred_models = [
         "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile",
         "llama3-8b-8192",
+        "llama-3.3-70b-versatile",
         "llama3-70b-8192",
         "mixtral-8x7b-32768",
         "gemma2-9b-it",
     ]
     try:
         available_models = [m.id for m in client.models.list().data]
-        # Pick the first preferred model that exists in account
         for pref in preferred_models:
             if pref in available_models:
                 return pref
-        # Fallback to any text completion model available
         for m in available_models:
             if not any(skip in m for skip in ["whisper", "guard", "embed", "tts"]):
                 return m
     except Exception:
         pass
-    return "llama-3.1-8b-instant"
+    return GROQ_MODEL
 
 
 def build_context_prompt(question: str, retrieved_chunks: List[Dict[str, Any]], approach_name: str) -> str:
