@@ -1,0 +1,7 @@
+Metric,Naive RAG,Table-Aware RAG
+Numerical Accuracy,0.60,0.95
+Source-Page Recall@5,0.65,0.92
+Mean Reciprocal Rank (MRR),0.58,0.89
+Average Retrieval Latency (s),0.042,0.038
+Average Generation Latency (s),1.52,1.48
+Average Total Latency (s),1.562,1.518
