@@ -3,9 +3,6 @@ import time
 from typing import List, Dict, Any, Tuple
 from groq import Groq
 
-# Universally accessible model on all Groq tiers (560+ tokens/sec)
-GROQ_MODEL = "llama-3.1-8b-instant"
-
 
 def get_llm_client(api_key: str = None) -> Groq:
     """Initializes Groq client safely from key or environment variable."""
@@ -13,6 +10,31 @@ def get_llm_client(api_key: str = None) -> Groq:
     if not key:
         raise ValueError("Missing GROQ_API_KEY. Provide it via Streamlit Secrets or Environment.")
     return Groq(api_key=key)
+
+
+def get_best_available_model(client: Groq) -> str:
+    """Queries Groq dynamically to find which models are active on this account."""
+    preferred_models = [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "llama3-8b-8192",
+        "llama3-70b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+    ]
+    try:
+        available_models = [m.id for m in client.models.list().data]
+        # Pick the first preferred model that exists in account
+        for pref in preferred_models:
+            if pref in available_models:
+                return pref
+        # Fallback to any text completion model available
+        for m in available_models:
+            if not any(skip in m for skip in ["whisper", "guard", "embed", "tts"]):
+                return m
+    except Exception:
+        pass
+    return "llama-3.1-8b-instant"
 
 
 def build_context_prompt(question: str, retrieved_chunks: List[Dict[str, Any]], approach_name: str) -> str:
@@ -60,15 +82,18 @@ def generate_answer(
     question: str,
     retrieved_chunks: List[Dict[str, Any]],
     approach_name: str = "Standard RAG",
-    model_name: str = GROQ_MODEL,
+    model_name: str = None,
     max_retries: int = 3
 ) -> Tuple[str, float, bool]:
     """
-    Executes answer generation using Groq LLaMA with retry handling.
+    Executes answer generation using dynamically detected Groq model.
     Returns: (answer_text, generation_latency, is_success)
     """
     if not retrieved_chunks:
         return "No relevant context found to generate an answer.", 0.0, False
+        
+    if not model_name:
+        model_name = get_best_available_model(client)
         
     prompt = build_context_prompt(question, retrieved_chunks, approach_name)
     
@@ -105,7 +130,7 @@ def generate_answer(
                 delay *= 2
                 continue
             gen_latency = time.perf_counter() - start_time
-            return f"Groq Generation error: {str(e)}", gen_latency, False
+            return f"Groq Generation error ({model_name}): {str(e)}", gen_latency, False
             
     gen_latency = time.perf_counter() - start_time
     return "Generation timed out after retries.", gen_latency, False
