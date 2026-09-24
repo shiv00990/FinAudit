@@ -11,7 +11,7 @@ from src.document_processor import (
     create_table_aware_chunks
 )
 from src.retrieval import FAISSRetriever
-from src.rag_engine import get_gemini_client, generate_answer, GEMINI_MODEL
+from src.rag_engine import get_llm_client, generate_answer, GROQ_MODEL
 
 st.set_page_config(
     page_title="FinAudit RAGBench",
@@ -26,9 +26,10 @@ def load_embedding_model():
 
 
 def resolve_api_key() -> str:
-    if "GOOGLE_API_KEY" in st.secrets:
-        return st.secrets["GOOGLE_API_KEY"]
-    return os.environ.get("GOOGLE_API_KEY", "")
+    # Check for Groq key first, then fallback to environment
+    if "GROQ_API_KEY" in st.secrets:
+        return st.secrets["GROQ_API_KEY"]
+    return os.environ.get("GROQ_API_KEY", "")
 
 
 @st.cache_data
@@ -54,7 +55,7 @@ page = st.sidebar.radio(
 
 api_key = resolve_api_key()
 if not api_key:
-    st.sidebar.warning("⚠️ GOOGLE_API_KEY not detected in secrets or environment.")
+    st.sidebar.warning("⚠️ GROQ_API_KEY not detected in secrets or environment.")
 
 # ====================================================
 # PAGE 1: OVERVIEW
@@ -75,7 +76,7 @@ if page == "1. Overview":
     col1.metric("Benchmark Questions", "5 Verified Cases")
     col2.metric("RAG Architectures", "Naive vs. Table-Aware")
     col3.metric("Evaluated Target", "Apple 10-K (FY25)")
-    col4.metric("Generator", GEMINI_MODEL)
+    col4.metric("Generator", f"Groq ({GROQ_MODEL})")
     
     st.markdown("---")
     st.markdown("""
@@ -83,7 +84,7 @@ if page == "1. Overview":
     - **Vector Search:** `faiss-cpu` with L2-normalized cosine inner product (`IndexFlatIP`).
     - **Embeddings:** `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional).
     - **Table-Aware Pipeline:** Preserves tabular matrix integrity and structures tables as intact markdown units.
-    - **Resilient Generation:** Exponential backoff retry handler built specifically for Gemini 503 load spikes.
+    - **Ultra-Fast Generation:** Powered by Groq LPU engine for sub-second responses without 503 limits.
     """)
 
 # ====================================================
@@ -123,14 +124,14 @@ elif page == "2. Benchmark Results":
         st.markdown("### Question-Level Benchmark Table")
         st.dataframe(results_df, use_container_width=True)
     else:
-        st.warning("Benchmark metric files not found in `results/`. Please check the repository structure.")
+        st.warning("Benchmark metric files not found in `results/`.")
 
 # ====================================================
 # PAGE 3: INTERACTIVE Q&A
 # ====================================================
 elif page == "3. Interactive Q&A":
     st.title("Interactive Financial RAG Testing")
-    st.markdown("Upload a financial PDF report (e.g., Apple 10-K) and compare Naive RAG vs. Table-Aware RAG.")
+    st.markdown("Upload a financial PDF report (e.g., Apple or Microsoft 10-K) and compare Naive RAG vs. Table-Aware RAG.")
     
     uploaded_pdf = st.file_uploader("Upload Financial PDF", type=["pdf"])
     
@@ -184,26 +185,26 @@ elif page == "3. Interactive Q&A":
                 table_results = table_retriever.retrieve(query_input, top_k=top_k)
                 table_retrieval_lat = time.perf_counter() - t0_table
                 
-            # 5. Gemini Generation
-            gemini_client = None
+            # 5. Groq Client Generation
+            llm_client = None
             if api_key:
                 try:
-                    gemini_client = get_gemini_client(api_key)
+                    llm_client = get_llm_client(api_key)
                 except Exception as e:
-                    st.warning(f"Could not initialize Gemini Client: {e}")
+                    st.warning(f"Could not initialize Groq Client: {e}")
 
             # Display side-by-side
             col_naive, col_table = st.columns(2)
             
             with col_naive:
                 st.subheader("Naive RAG")
-                if gemini_client:
+                if llm_client:
                     with st.spinner("Generating Naive response..."):
                         ans_naive, gen_lat_naive, ok_naive = generate_answer(
-                            gemini_client, query_input, naive_results, "Naive RAG"
+                            llm_client, query_input, naive_results, "Naive RAG"
                         )
                 else:
-                    ans_naive, gen_lat_naive, ok_naive = "Gemini key not configured. Showing retrieval only.", 0.0, False
+                    ans_naive, gen_lat_naive, ok_naive = "GROQ_API_KEY not configured. Showing retrieval only.", 0.0, False
                 
                 if ok_naive:
                     st.success(ans_naive)
@@ -223,13 +224,13 @@ elif page == "3. Interactive Q&A":
                         
             with col_table:
                 st.subheader("Table-Aware RAG")
-                if gemini_client:
+                if llm_client:
                     with st.spinner("Generating Table-Aware response..."):
                         ans_table, gen_lat_table, ok_table = generate_answer(
-                            gemini_client, query_input, table_results, "Table-Aware RAG"
+                            llm_client, query_input, table_results, "Table-Aware RAG"
                         )
                 else:
-                    ans_table, gen_lat_table, ok_table = "Gemini key not configured. Showing retrieval only.", 0.0, False
+                    ans_table, gen_lat_table, ok_table = "GROQ_API_KEY not configured. Showing retrieval only.", 0.0, False
                 
                 if ok_table:
                     st.success(ans_table)
@@ -292,7 +293,7 @@ elif page == "5. Failure Analysis":
         
         st.markdown("### Core Failure Root Causes")
         st.markdown("""
-        1. **Row & Header Severing:** Standard sliding text chunking splits years (2025 vs 2024) across different vectors, making it impossible for the language model to determine which number matches which year.
+        1. **Row & Header Severing:** Standard sliding text chunking splits years across different vectors, making it impossible for the language model to determine which number matches which year.
         2. **Parentheses Negation Losses:** Naive extractors frequently misinterpret accounting parentheses `(1,200)` as decorative syntax rather than a negative cash flow.
         3. **Context Length Truncation:** When financial statements span multiple pages, naive retrieval returns isolated sentences from footnotes rather than the consolidated balance sheet matrix.
         """)

@@ -1,21 +1,18 @@
 import os
 import time
 from typing import List, Dict, Any, Tuple
-from google import genai
-from google.genai.errors import APIError
+from groq import Groq
 
-# Flash-Lite provides much higher availability and lower latency on the free tier
-PRIMARY_MODEL = "gemini-2.5-flash-lite"
-FALLBACK_MODEL = "gemini-2.5-flash"
-GEMINI_MODEL = PRIMARY_MODEL
+# LLaMA-3.3-70B-Versatile is extremely fast and accurate for financial auditing
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 
-def get_gemini_client(api_key: str = None) -> genai.Client:
-    """Initializes Google GenAI client from explicit key or environment variable."""
-    key = api_key or os.environ.get("GOOGLE_API_KEY")
+def get_llm_client(api_key: str = None) -> Groq:
+    """Initializes Groq client safely from key or environment variable."""
+    key = api_key or os.environ.get("GROQ_API_KEY")
     if not key:
-        raise ValueError("Missing GOOGLE_API_KEY. Provide it via Streamlit Secrets or Environment.")
-    return genai.Client(api_key=key)
+        raise ValueError("Missing GROQ_API_KEY. Provide it via Streamlit Secrets or Environment.")
+    return Groq(api_key=key)
 
 
 def build_context_prompt(question: str, retrieved_chunks: List[Dict[str, Any]], approach_name: str) -> str:
@@ -59,15 +56,15 @@ Supporting Pages: Page <X>, Page <Y>
 
 
 def generate_answer(
-    client: genai.Client,
+    client: Groq,
     question: str,
     retrieved_chunks: List[Dict[str, Any]],
     approach_name: str = "Standard RAG",
-    model_name: str = GEMINI_MODEL,
+    model_name: str = GROQ_MODEL,
     max_retries: int = 3
 ) -> Tuple[str, float, bool]:
     """
-    Executes answer generation with model fallback and exponential backoff on 503 errors.
+    Executes answer generation using Groq LLaMA-3 with retry handling.
     Returns: (answer_text, generation_latency, is_success)
     """
     if not retrieved_chunks:
@@ -76,37 +73,39 @@ def generate_answer(
     prompt = build_context_prompt(question, retrieved_chunks, approach_name)
     
     start_time = time.perf_counter()
-    models_to_try = [model_name, FALLBACK_MODEL] if model_name != FALLBACK_MODEL else [model_name]
+    delay = 1.0
     
-    for current_model in models_to_try:
-        delay = 1.5
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model=current_model,
-                    contents=prompt
-                )
-                gen_latency = time.perf_counter() - start_time
+    for attempt in range(max_retries):
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a professional financial analyst that answers with strict factual and numerical precision."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model=model_name,
+                temperature=0.0
+            )
+            gen_latency = time.perf_counter() - start_time
+            content = chat_completion.choices[0].message.content
+            
+            if content and content.strip():
+                return content.strip(), gen_latency, True
+            else:
+                return "Model returned empty text.", gen_latency, False
                 
-                if response.text and response.text.strip():
-                    return response.text.strip(), gen_latency, True
-                else:
-                    return "Model returned an empty response. Verify context sufficiency.", gen_latency, False
-                    
-            except APIError:
-                if attempt < max_retries - 1:
-                    time.sleep(delay)
-                    delay *= 2
-                    continue
-                break  # try next model in fallback list
-            except Exception as e:
-                gen_latency = time.perf_counter() - start_time
-                return f"Generation request encountered an error: {str(e)}", gen_latency, False
-                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            gen_latency = time.perf_counter() - start_time
+            return f"Groq Generation error: {str(e)}", gen_latency, False
+            
     gen_latency = time.perf_counter() - start_time
-    error_msg = (
-        "Gemini temporarily unavailable (High Demand/503). "
-        "The document retrieval completed successfully, but answer generation "
-        "could not be completed. Please try again."
-    )
-    return error_msg, gen_latency, False
+    return "Generation timed out after retries.", gen_latency, False
