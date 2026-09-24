@@ -4,7 +4,10 @@ from typing import List, Dict, Any, Tuple
 from google import genai
 from google.genai.errors import APIError
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# Flash-Lite provides much higher availability and lower latency on the free tier
+PRIMARY_MODEL = "gemini-2.5-flash-lite"
+FALLBACK_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = PRIMARY_MODEL
 
 
 def get_gemini_client(api_key: str = None) -> genai.Client:
@@ -64,7 +67,7 @@ def generate_answer(
     max_retries: int = 3
 ) -> Tuple[str, float, bool]:
     """
-    Executes answer generation with exponential backoff on 503 errors.
+    Executes answer generation with model fallback and exponential backoff on 503 errors.
     Returns: (answer_text, generation_latency, is_success)
     """
     if not retrieved_chunks:
@@ -73,37 +76,37 @@ def generate_answer(
     prompt = build_context_prompt(question, retrieved_chunks, approach_name)
     
     start_time = time.perf_counter()
-    delay = 2.0
+    models_to_try = [model_name, FALLBACK_MODEL] if model_name != FALLBACK_MODEL else [model_name]
     
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-            gen_latency = time.perf_counter() - start_time
-            
-            if response.text and response.text.strip():
-                return response.text.strip(), gen_latency, True
-            else:
-                return "Model returned an empty response. Verify context sufficiency.", gen_latency, False
-                
-        except APIError:
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-                delay *= 2
-                continue
-            else:
-                gen_latency = time.perf_counter() - start_time
-                error_msg = (
-                    "Gemini temporarily unavailable (High Demand/503). "
-                    "The document retrieval completed successfully, but answer generation "
-                    "could not be completed. Please try again."
+    for current_model in models_to_try:
+        delay = 1.5
+        for attempt in range(max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=current_model,
+                    contents=prompt
                 )
-                return error_msg, gen_latency, False
-        except Exception as e:
-            gen_latency = time.perf_counter() - start_time
-            return f"Generation request encountered an error: {str(e)}", gen_latency, False
-            
+                gen_latency = time.perf_counter() - start_time
+                
+                if response.text and response.text.strip():
+                    return response.text.strip(), gen_latency, True
+                else:
+                    return "Model returned an empty response. Verify context sufficiency.", gen_latency, False
+                    
+            except APIError:
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                break  # try next model in fallback list
+            except Exception as e:
+                gen_latency = time.perf_counter() - start_time
+                return f"Generation request encountered an error: {str(e)}", gen_latency, False
+                
     gen_latency = time.perf_counter() - start_time
-    return "Generation timed out after retries.", gen_latency, False
+    error_msg = (
+        "Gemini temporarily unavailable (High Demand/503). "
+        "The document retrieval completed successfully, but answer generation "
+        "could not be completed. Please try again."
+    )
+    return error_msg, gen_latency, False
